@@ -45,7 +45,7 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 # Configure OpenAI
-# Create client instead of using global configuration to avoid proxy issues
+# Create client instead of using global configuration
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # Command history for audit and improved responses
@@ -208,17 +208,17 @@ Always provide complete, valid JSON that a robot can execute immediately.
         user_prompt = context + "\n\n" + user_prompt
 
     try:
-        # Create a fresh client for each API call to avoid proxy issues
+        # Create a fresh client for each API call - FIXED: Only pass api_key
         client = OpenAI(api_key=openai_api_key)
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Changed from gpt-3.5-turbo to 4o-mini
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.3,  # Lower temperature for more consistent outputs
-            response_format={"type": "json_object"}  # Ensure JSON response
+            temperature=0.3,
+            response_format={"type": "json_object"}
         )
 
         raw_output = response.choices[0].message.content
@@ -263,7 +263,7 @@ Always provide complete, valid JSON that a robot can execute immediately.
                     "mode": "stop",
                     "description": "Command parsing error - robot stopped"
                 }],
-                "description": "Error in command processing"  # Removed sequence_type
+                "description": "Error in command processing"
             }
 
     except Exception as e:
@@ -274,7 +274,7 @@ Always provide complete, valid JSON that a robot can execute immediately.
                 "mode": "stop",
                 "description": "API error - robot stopped"
             }],
-            "description": "Error in API communication"  # Removed sequence_type
+            "description": "Error in API communication"
         }
 
 # Routes
