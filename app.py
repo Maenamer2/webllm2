@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 from sqlalchemy import text
 from openai import OpenAI
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -56,6 +57,15 @@ rate_limits = {
     "admin": {"requests": 50, "period": 3600},  # 50 requests per hour
     "user": {"requests": 20, "period": 3600}    # 20 requests per hour
 }
+
+# Track login attempts
+login_attempts = {}  # Format: {username: [count, timestamp]}
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_TIME_MINUTES = 15
+
+# Password policy settings
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$')
 
 # Database initialization function
 def init_db():
@@ -130,6 +140,30 @@ def rate_limit(f):
         
         return f(*args, **kwargs)
     return decorated_function
+
+def validate_password(password):
+    """
+    Validates password against the password policy.
+    Returns a list of error messages, or an empty list if password is valid.
+    """
+    errors = []
+    
+    if len(password) < PASSWORD_MIN_LENGTH:
+        errors.append(f'Password must be at least {PASSWORD_MIN_LENGTH} characters long')
+    
+    if not re.search(r'[A-Z]', password):
+        errors.append('Password must contain at least one uppercase letter')
+        
+    if not re.search(r'[a-z]', password):
+        errors.append('Password must contain at least one lowercase letter')
+        
+    if not re.search(r'\d', password):
+        errors.append('Password must contain at least one digit')
+        
+    if not re.search(r'[@$!%*?&#]', password):
+        errors.append('Password must contain at least one special character (@$!%*?&#)')
+    
+    return errors
 
 def interpret_command(command, previous_commands=None):
     """
@@ -288,15 +322,50 @@ def login():
 def auth():
     username = request.form.get('username', '')
     password = request.form.get('password', '')
+    ip_address = request.remote_addr
 
+    # Check if the username is locked out
+    if username in login_attempts:
+        attempts, timestamp = login_attempts[username]
+        
+        # Check if lockout is still active
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            lockout_until = timestamp + timedelta(minutes=LOCKOUT_TIME_MINUTES)
+            if datetime.now() < lockout_until:
+                remaining_minutes = int((lockout_until - datetime.now()).total_seconds() / 60) + 1
+                flash(f'Account is locked due to too many failed attempts. Try again in {remaining_minutes} minutes.', 'error')
+                return redirect(url_for('login'))
+            else:
+                # Reset attempts if lockout period has passed
+                login_attempts[username] = [0, datetime.now()]
+
+    # Validate credentials
     user = User.query.filter_by(username=username).first()
     
     if user and user.check_password(password):
+        # Successful login - reset attempt counter
+        if username in login_attempts:
+            login_attempts.pop(username)
+            
         session['user_id'] = user.id
         session['username'] = user.username
         return redirect(url_for('home'))
     else:
-        flash('Invalid username or password')
+        # Failed login - increment attempt counter
+        if username in login_attempts:
+            attempts, _ = login_attempts[username]
+            login_attempts[username] = [attempts + 1, datetime.now()]
+        else:
+            login_attempts[username] = [1, datetime.now()]
+        
+        attempts = login_attempts[username][0]
+        remaining_attempts = MAX_LOGIN_ATTEMPTS - attempts
+        
+        if remaining_attempts <= 0:
+            flash(f'Too many failed login attempts. Account locked for {LOCKOUT_TIME_MINUTES} minutes.', 'error')
+        else:
+            flash(f'Invalid username or password. {remaining_attempts} attempts remaining before account lockout.', 'error')
+            
         return redirect(url_for('login'))
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -308,16 +377,23 @@ def register():
         
         # Validate input
         if not username or not password:
-            flash('Username and password are required')
+            flash('Username and password are required', 'error')
             return redirect(url_for('register'))
             
         if password != confirm_password:
-            flash('Passwords do not match')
+            flash('Passwords do not match', 'error')
+            return redirect(url_for('register'))
+        
+        # Validate password strength
+        password_errors = validate_password(password)
+        if password_errors:
+            for error in password_errors:
+                flash(error, 'error')
             return redirect(url_for('register'))
             
         # Check if username already exists
         if User.query.filter_by(username=username).first():
-            flash('Username already exists')
+            flash('Username already exists', 'error')
             return redirect(url_for('register'))
         
         # Create new user
@@ -327,7 +403,7 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         
-        flash('Registration successful! Please login.')
+        flash('Registration successful! Please login.', 'success')
         return redirect(url_for('login'))
     
     return render_template('register.html')
@@ -436,6 +512,13 @@ def edit_user(user_id):
         
         # Update password if provided
         if new_password:
+            # Validate password if admin is changing it
+            password_errors = validate_password(new_password)
+            if password_errors:
+                for error in password_errors:
+                    flash(error, 'error')
+                return redirect(url_for('edit_user', user_id=user_id))
+            
             user.set_password(new_password)
         
         try:
