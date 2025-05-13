@@ -1,18 +1,7 @@
-# Override proxy environment variables at the very top
-import os
-# Clear any proxy environment variables to prevent them from being passed to OpenAI
-os.environ.pop('HTTP_PROXY', None)
-os.environ.pop('HTTPS_PROXY', None)
-os.environ.pop('http_proxy', None)
-os.environ.pop('https_proxy', None)
-os.environ.pop('PROXY', None)
-os.environ.pop('proxy', None)
-os.environ.pop('ALL_PROXY', None)
-os.environ.pop('all_proxy', None)
-
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash
 import json
 from dotenv import load_dotenv
+import os
 import time
 import logging
 import re
@@ -21,9 +10,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 from sqlalchemy import text
-import openai
-import requests
-from requests.exceptions import RequestException
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -34,9 +21,6 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")  # Better to use env variable on Render
-
-# Configure OpenAI (the old way)
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configure SQLAlchemy - Handle Heroku/Render style PostgreSQL URLs
 database_url = os.getenv("DATABASE_URL", "sqlite:///robot_control.db")
@@ -59,6 +43,10 @@ class User(db.Model):
         
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+# Configure OpenAI
+# Create client instead of using global configuration to avoid proxy issues
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # Command history for audit and improved responses
 command_history = {}
@@ -146,14 +134,8 @@ def rate_limit(f):
 def interpret_command(command, previous_commands=None):
     """
     Enhanced function to interpret human commands with context from previous commands.
-    Uses multiple approaches to avoid proxy issues with OpenAI API.
+    Improved to handle directional commands more logically.
     """
-    # Clear proxy settings locally for this function
-    local_env = os.environ.copy()
-    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy']:
-        if proxy_var in local_env:
-            del local_env[proxy_var]
-    
     # Define a more detailed system prompt with improved prompt engineering
     system_prompt = """You are an AI that converts natural language movement instructions into structured JSON commands for a 4-wheeled robot.
 
@@ -226,217 +208,63 @@ Always provide complete, valid JSON that a robot can execute immediately.
         user_prompt = context + "\n\n" + user_prompt
 
     try:
-        # APPROACH 1: Try using the requests library directly
+        # Create a fresh client for each API call to avoid proxy issues
+        client = OpenAI(api_key=openai_api_key)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Changed from gpt-3.5-turbo to 4o-mini
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,  # Lower temperature for more consistent outputs
+            response_format={"type": "json_object"}  # Ensure JSON response
+        )
+
+        raw_output = response.choices[0].message.content
+        logger.info(f"Raw LLM output: {raw_output}")
+
         try:
-            logger.info("Trying direct API call with requests library")
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
-            }
-            payload = {
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.3,
-                "response_format": {"type": "json_object"}
-            }
+            parsed_data = json.loads(raw_output)
             
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
+            # Remove timestamp and sequence_type if present
+            if "timestamp" in parsed_data:
+                del parsed_data["timestamp"]
+                
+            if "sequence_type" in parsed_data:
+                del parsed_data["sequence_type"]
             
-            if response.status_code == 200:
-                response_data = response.json()
-                raw_output = response_data['choices'][0]['message']['content']
-                logger.info(f"Raw LLM output (direct API): {raw_output}")
-                
-                parsed_data = json.loads(raw_output)
-                
-                # Remove timestamp and sequence_type if present
-                if "timestamp" in parsed_data:
-                    del parsed_data["timestamp"]
-                    
-                if "sequence_type" in parsed_data:
-                    del parsed_data["sequence_type"]
-                
-                parsed_data["original_command"] = command
-                
-                # Validate the JSON structure
-                if "commands" not in parsed_data:
-                    parsed_data["commands"] = [{
-                        "mode": "stop",
-                        "description": "Invalid command structure - missing commands array"
-                    }]
-                
-                return parsed_data
-                
-            else:
-                logger.error(f"API error (HTTP {response.status_code}): {response.text}")
-                raise Exception(f"API error (HTTP {response.status_code}): {response.text}")
-                
-        except Exception as e:
-            logger.error(f"Direct API request failed: {str(e)}")
+            parsed_data["original_command"] = command
             
-            # APPROACH 2: Try old-style OpenAI client but with ChatCompletion
-            try:
-                logger.info("Trying old-style OpenAI client with ChatCompletion")
-                response = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3
-                )
-                
-                raw_output = response['choices'][0]['message']['content']
-                logger.info(f"Raw LLM output (ChatCompletion): {raw_output}")
-                
-                parsed_data = json.loads(raw_output)
-                
-                # Remove timestamp and sequence_type if present
-                if "timestamp" in parsed_data:
-                    del parsed_data["timestamp"]
-                    
-                if "sequence_type" in parsed_data:
-                    del parsed_data["sequence_type"]
-                
-                parsed_data["original_command"] = command
-                
-                # Validate the JSON structure
-                if "commands" not in parsed_data:
-                    parsed_data["commands"] = [{
-                        "mode": "stop",
-                        "description": "Invalid command structure - missing commands array"
-                    }]
-                
-                return parsed_data
-                
-            except Exception as e2:
-                logger.error(f"ChatCompletion attempt failed: {str(e2)}")
-                
-                # APPROACH 3: Try old-style OpenAI client with Completion API as last resort
+            # Validate the JSON structure
+            if "commands" not in parsed_data:
+                parsed_data["commands"] = [{
+                    "mode": "stop",
+                    "description": "Invalid command structure - missing commands array"
+                }]
+            
+            return parsed_data
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error: {e}, raw output: {raw_output}")
+            
+            # Try to extract JSON from the response using regex - useful for debugging
+            json_match = re.search(r'```json(.*?)```', raw_output, re.DOTALL)
+            if json_match:
                 try:
-                    logger.info("Trying old-style OpenAI client with Completion API")
-                    combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
-                    
-                    response = openai.Completion.create(
-                        model="gpt-3.5-turbo-instruct",  # Using instruct model as fallback
-                        prompt=combined_prompt,
-                        temperature=0.3,
-                        max_tokens=1024
-                    )
-                    
-                    raw_output = response['choices'][0]['text'].strip()
-                    logger.info(f"Raw LLM output (Completion API): {raw_output}")
-                    
-                    # The completion API might not output clean JSON, so we need to try to extract it
-                    try:
-                        parsed_data = json.loads(raw_output)
-                    except json.JSONDecodeError:
-                        # Try to extract JSON using regex
-                        json_match = re.search(r'```(?:json)?(.*?)```', raw_output, re.DOTALL)
-                        if json_match:
-                            try:
-                                json_str = json_match.group(1).strip()
-                                parsed_data = json.loads(json_str)
-                            except json.JSONDecodeError:
-                                raise
-                        else:
-                            # Try one more approach - find anything that looks like JSON
-                            match = re.search(r'(\{.*\})', raw_output, re.DOTALL)
-                            if match:
-                                json_str = match.group(1).strip()
-                                parsed_data = json.loads(json_str)
-                            else:
-                                raise Exception("Could not extract JSON from response")
-                    
-                    # Remove timestamp and sequence_type if present
-                    if "timestamp" in parsed_data:
-                        del parsed_data["timestamp"]
-                        
-                    if "sequence_type" in parsed_data:
-                        del parsed_data["sequence_type"]
-                    
-                    parsed_data["original_command"] = command
-                    
-                    # Validate the JSON structure
-                    if "commands" not in parsed_data:
-                        parsed_data["commands"] = [{
-                            "mode": "stop",
-                            "description": "Invalid command structure - missing commands array"
-                        }]
-                    
-                    return parsed_data
-                    
-                except Exception as e3:
-                    logger.error(f"All OpenAI API approaches failed: {str(e3)}")
-                    
-                    # FALLBACK: Use a simple rule-based command for common patterns
-                    command_lower = command.lower()
-                    if "forward" in command_lower:
-                        return {
-                            "commands": [{
-                                "mode": "linear",
-                                "direction": "forward",
-                                "speed": 1.0,
-                                "distance": 1.0,
-                                "stop_condition": "distance"
-                            }],
-                            "description": f"Move forward at medium speed for 1 meter (fallback for: {command})",
-                            "original_command": command
-                        }
-                    elif "backward" in command_lower or "back" in command_lower:
-                        return {
-                            "commands": [{
-                                "mode": "linear",
-                                "direction": "backward",
-                                "speed": 1.0,
-                                "distance": 1.0,
-                                "stop_condition": "distance"
-                            }],
-                            "description": f"Move backward at medium speed for 1 meter (fallback for: {command})",
-                            "original_command": command
-                        }
-                    elif "left" in command_lower:
-                        return {
-                            "commands": [{
-                                "mode": "rotate",
-                                "direction": "left",
-                                "speed": 0.8,
-                                "rotation": 90,
-                                "stop_condition": "rotation"
-                            }],
-                            "description": f"Rotate left 90 degrees (fallback for: {command})",
-                            "original_command": command
-                        }
-                    elif "right" in command_lower:
-                        return {
-                            "commands": [{
-                                "mode": "rotate",
-                                "direction": "right",
-                                "speed": 0.8,
-                                "rotation": 90,
-                                "stop_condition": "rotation"
-                            }],
-                            "description": f"Rotate right 90 degrees (fallback for: {command})",
-                            "original_command": command
-                        }
-                    else:
-                        return {
-                            "commands": [{
-                                "mode": "stop",
-                                "description": "API error - robot stopped"
-                            }],
-                            "description": "Error in API communication - Command not recognized",
-                            "error": "All API approaches failed and command not recognized",
-                            "original_command": command
-                        }
+                    json_str = json_match.group(1).strip()
+                    return json.loads(json_str)
+                except:
+                    pass
+            
+            # Fallback response if parsing fails
+            return {
+                "error": "Failed to parse response as JSON",
+                "commands": [{
+                    "mode": "stop",
+                    "description": "Command parsing error - robot stopped"
+                }],
+                "description": "Error in command processing"  # Removed sequence_type
+            }
 
     except Exception as e:
         logger.error(f"API error: {str(e)}")
@@ -446,8 +274,7 @@ Always provide complete, valid JSON that a robot can execute immediately.
                 "mode": "stop",
                 "description": "API error - robot stopped"
             }],
-            "description": "Error in API communication",
-            "original_command": command
+            "description": "Error in API communication"  # Removed sequence_type
         }
 
 # Routes
