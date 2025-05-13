@@ -10,7 +10,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 from sqlalchemy import text
-from openai import OpenAI
+import openai  # Use old import style that was working
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -21,6 +21,9 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")  # Better to use env variable on Render
+
+# Configure OpenAI (use the old working approach)
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configure SQLAlchemy - Handle Heroku/Render style PostgreSQL URLs
 database_url = os.getenv("DATABASE_URL", "sqlite:///robot_control.db")
@@ -43,10 +46,6 @@ class User(db.Model):
         
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
-
-# Configure OpenAI
-# Create client instead of using global configuration to avoid proxy issues
-openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # Command history for audit and improved responses
 command_history = {}
@@ -208,10 +207,8 @@ Always provide complete, valid JSON that a robot can execute immediately.
         user_prompt = context + "\n\n" + user_prompt
 
     try:
-        # Create a fresh client for each API call to avoid proxy issues
-        client = OpenAI(api_key=openai_api_key)
-        
-        response = client.chat.completions.create(
+        # Use the old direct API call that was working
+        response = openai.chat.completions.create(
             model="gpt-4o-mini",  # Changed from gpt-3.5-turbo to 4o-mini
             messages=[
                 {"role": "system", "content": system_prompt},
