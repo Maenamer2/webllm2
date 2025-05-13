@@ -166,6 +166,7 @@ def validate_password(password):
     return errors
 
 def interpret_command(command, previous_commands=None):
+
     """
     Enhanced function to interpret human commands with context from previous commands.
     Improved to handle directional commands more logically.
@@ -173,63 +174,63 @@ def interpret_command(command, previous_commands=None):
     # Define a more detailed system prompt with improved prompt engineering
     system_prompt = """You are an AI that converts natural language movement instructions into structured JSON commands for a 4-wheeled robot.
 
-You MUST ONLY output valid JSON. No explanations, text, or markdown formatting.
+    You MUST ONLY output valid JSON. No explanations, text, or markdown formatting.
 
-Input: Natural language instructions for robot movement
-Output: JSON object representing the commands
+    Input: Natural language instructions for robot movement
+    Output: JSON object representing the commands
 
-**Supported Movements:**
-- Linear motion: Use "mode": "linear" with "direction": "forward" or "backward", with speed (m/s) and either distance (m) or time (s)
-- Rotation: Use "mode": "rotate" with "direction": "left" or "right", with degrees and speed
-- Arc movements: Use "mode": "arc" for curved paths with specified radius and direction
-- Complex shapes: "square", "circle", "triangle", "rectangle", "spiral", "figure-eight"
-- Sequential movements: Multiple commands in sequence
+    **Supported Movements:**
+    - Linear motion: Use "mode": "linear" with "direction": "forward" or "backward", with speed (m/s) and either distance (m) or time (s)
+    - Rotation: Use "mode": "rotate" with "direction": "left" or "right", with degrees and speed
+    - Arc movements: Use "mode": "arc" for curved paths with specified radius and direction
+    - Complex shapes: "square", "circle", "triangle", "rectangle", "spiral", "figure-eight"
+    - Sequential movements: Multiple commands in sequence
 
-**Output Format:**
-{
-  "commands": [
+    **Output Format:**
     {
-      "mode": "linear|rotate|arc|stop",
-      "direction": "forward|backward|left|right",
-      "speed": float,  // meters per second (0.1-2.0)
-      "distance": float,  // meters (if applicable)
-      "time": float,  // seconds (if applicable)
-      "rotation": float,  // degrees (if applicable)
-      "turn_radius": float,  // meters (for arc movements)
-      "stop_condition": "time|distance|obstacle"  // when to stop
-    },
-    // Additional commands for sequences
-  ],
-  "description": "Brief human-readable description of what the robot will do"
-}
+      "commands": [
+        {
+          "mode": "linear|rotate|arc|stop",
+          "direction": "forward|backward|left|right",
+          "speed": float,  // meters per second (0.1-2.0)
+          "distance": float,  // meters (if applicable)
+          "time": float,  // seconds (if applicable)
+          "rotation": float,  // degrees (if applicable)
+          "turn_radius": float,  // meters (for arc movements)
+          "stop_condition": "time|distance|obstacle"  // when to stop
+        },
+        // Additional commands for sequences
+      ],
+      "description": "Brief human-readable description of what the robot will do"
+    }
 
-**IMPORTANT RULES:**
-1. For rotation movements:
-   - Use "mode": "rotate" with "direction": "left" or "right"
-   - Always specify a rotation value in degrees (default to 90 if not specified)
-   - Always specify a reasonable speed (0.5-1.0 m/s is typical for rotation)
-   - Use "stop_condition": "time" if time is specified, otherwise "rotation"
+    **IMPORTANT RULES:**
+    1. For rotation movements:
+       - Use "mode": "rotate" with "direction": "left" or "right"
+       - Always specify a rotation value in degrees 
+       - Always specify a reasonable speed (0.5-1.0 m/s is typical for rotation)
+       - Use "stop_condition": "time" if time is specified, otherwise "rotation"
+       1.2) for arc mode specify: turn radius and distance(distance of the arc)
 
-2. For linear movements:
-   - Use "mode": "linear" with "direction": "forward" or "backward"
-   - Never use "left" or "right" as direction for linear movements
-   - For "go right" type instructions, interpret as "rotate right, then go forward"
-   - For "go left quickly for 5 meters", interpret as "rotate left, then go forward for 5 meters"
+    2. For linear movements:
+       - Use "mode": "linear" with "direction": "forward" or "backward"
+       - Never use "left" or "right" as direction for linear movements
+       - For "go right" type instructions, interpret as "rotate right, then go forward"
+       - For "go left quickly for 5 meters", interpret as "rotate left, then go forward for 5 meters"
 
-3. For sequences:
-   - Break each logical movement into its own command object
-   - Make sure speeds match descriptions (e.g., "quickly" = 1.5-2.0 m/s, "slowly" = 0.3-0.7 m/s)
+    3. For sequences:
+       - Break each logical movement into its own command object
+       - Make sure speeds match descriptions (e.g., "quickly" = 1.5-2.0 m/s, "slowly" = 0.3-0.7 m/s)
 
-For shapes, break them down into appropriate primitive movements:
-- Square: 4 forward movements with 90° right/left turns
-- Circle: A series of short arcs that form a complete 360° path
-- Triangle: 3 forward movements with 120° turns
-- Rectangle: 2 pairs of different-length forward movements with 90° turns
-- Figure-eight: Two connected circles in opposite directions
-
-Always provide complete, valid JSON that a robot can execute immediately.
-"""
-
+    For shapes, break them down into appropriate primitive movements:
+    - Square: 4 forward movements with 90° right/left turns
+    - Circle: A arc that forms a complete 360° path
+    - Triangle: 3 forward movements with 120° turns
+    - Rectangle: 2 pairs of different-length forward movements with 90° turns
+    - Figure-eight: Two connected circles in opposite directions
+    -question mark figure(complrx shape example) : half circle then downwards line movement
+    Always provide complete, valid JSON that a robot can execute immediately.
+    """
     # User prompt with context
     user_prompt = f"Convert this command into a structured robot command: \"{command}\""
     
