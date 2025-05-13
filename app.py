@@ -11,7 +11,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 from sqlalchemy import text
 import openai  # Use old import style that was working
-
+import os
+# Clear any proxy environment variables to prevent them from being passed to OpenAI
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ.pop('PROXY', None)
+os.environ.pop('proxy', None)
+os.environ.pop('ALL_PROXY', None)
+os.environ.pop('all_proxy', None)
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
