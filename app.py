@@ -272,6 +272,133 @@ Always provide complete, valid JSON that a robot can execute immediately.
         }
 
 # Routes
+import sqlite3
+from sqlalchemy import text
+
+# Add these routes after your existing routes
+
+@app.route('/admin/edit_user/<int:user_id>', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def edit_user(user_id):
+    # Get the user to edit
+    user = User.query.get_or_404(user_id)
+    
+    if request.method == 'POST':
+        username = request.form.get('username')
+        role = request.form.get('role')
+        new_password = request.form.get('password')
+        
+        # Validate input
+        if not username:
+            flash('Username is required', 'error')
+            return redirect(url_for('edit_user', user_id=user_id))
+        
+        # Check if username already exists and it's not the current user
+        existing_user = User.query.filter_by(username=username).first()
+        if existing_user and existing_user.id != user.id:
+            flash('Username already exists', 'error')
+            return redirect(url_for('edit_user', user_id=user_id))
+        
+        # Update user
+        user.username = username
+        user.role = role
+        
+        # Update password if provided
+        if new_password:
+            user.set_password(new_password)
+        
+        try:
+            db.session.commit()
+            flash('User updated successfully', 'success')
+            return redirect(url_for('admin_panel'))
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error updating user: {str(e)}")
+            flash(f'Error updating user: {str(e)}', 'error')
+            return redirect(url_for('edit_user', user_id=user_id))
+    
+    return render_template('edit_user.html', user=user)
+
+@app.route('/admin/delete_user/<int:user_id>', methods=['POST'])
+@login_required
+@admin_required
+def delete_user(user_id):
+    # Get the user to delete
+    user = User.query.get_or_404(user_id)
+    
+    # Prevent deleting the last admin
+    if user.role == 'admin' and User.query.filter_by(role='admin').count() <= 1:
+        flash('Cannot delete the last admin user', 'error')
+        return redirect(url_for('admin_panel'))
+    
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        flash('User deleted successfully', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error deleting user: {str(e)}")
+        flash(f'Error deleting user: {str(e)}', 'error')
+    
+    return redirect(url_for('admin_panel'))
+
+@app.route('/run_query', methods=['POST'])
+@login_required
+@admin_required
+def run_query():
+    query = request.form.get('query', '').strip()
+    
+    # Only allow SELECT queries for safety
+    if not query.lower().startswith('select'):
+        flash('Only SELECT queries are allowed', 'error')
+        return redirect(url_for('admin_panel'))
+    
+    try:
+        result = {}
+        # Execute the query using SQLAlchemy
+        with db.engine.connect() as conn:
+            result_proxy = conn.execute(text(query))
+            result['columns'] = result_proxy.keys()
+            result['rows'] = [list(row) for row in result_proxy]
+        
+        # Flash success message
+        flash(f'Query executed successfully: {len(result["rows"])} rows returned', 'success')
+        
+        # Store result in session for display
+        session['query_result'] = result
+        
+    except Exception as e:
+        logger.error(f"Error executing query: {str(e)}")
+        flash(f'Error executing query: {str(e)}', 'error')
+        session['query_result'] = {'message': f'Error: {str(e)}'}
+    
+    return redirect(url_for('admin_panel'))
+
+# Replace your existing admin_panel route with this updated version:
+@app.route('/admin')
+@login_required
+@admin_required
+def admin_panel():
+    users = User.query.all()
+    
+    # Get database type and location
+    db_type = 'SQLite'
+    db_location = app.config['SQLALCHEMY_DATABASE_URI']
+    
+    if 'postgresql' in db_location:
+        db_type = 'PostgreSQL'
+        # Mask password in the connection string for display
+        db_location = re.sub(r':[^@/]+@', ':***@', db_location)
+    
+    # Get query result from session if it exists
+    query_result = session.pop('query_result', None)
+    
+    return render_template('admin.html', 
+                          users=users, 
+                          db_type=db_type, 
+                          db_location=db_location,
+                          query_result=query_result)
 @app.route('/')
 def login():
     if 'user_id' in session:
