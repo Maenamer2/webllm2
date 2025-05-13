@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash
-import openai
 import json
 from dotenv import load_dotenv
 import os
@@ -11,6 +10,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
 from sqlalchemy import text
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,7 +45,8 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 # Configure OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Create client instead of using global configuration to avoid proxy issues
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # Command history for audit and improved responses
 command_history = {}
@@ -207,7 +208,10 @@ Always provide complete, valid JSON that a robot can execute immediately.
         user_prompt = context + "\n\n" + user_prompt
 
     try:
-        response = openai.chat.completions.create(
+        # Create a fresh client for each API call to avoid proxy issues
+        client = OpenAI(api_key=openai_api_key)
+        
+        response = client.chat.completions.create(
             model="gpt-4o-mini",  # Changed from gpt-3.5-turbo to 4o-mini
             messages=[
                 {"role": "system", "content": system_prompt},
