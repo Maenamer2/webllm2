@@ -20,8 +20,12 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your_secret_key")  # Better to use env variable on Render
 
-# Configure SQLAlchemy
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///robot_control.db")
+# Configure SQLAlchemy - Handle Heroku/Render style PostgreSQL URLs
+database_url = os.getenv("DATABASE_URL", "sqlite:///robot_control.db")
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -38,17 +42,6 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-# Create initial admin user if not exists
-@app.before_first_request
-def create_admin():
-    db.create_all()
-    if not User.query.filter_by(username='admin').first():
-        admin = User(username='admin', role='admin')
-        admin.set_password('admin')
-        db.session.add(admin)
-        db.session.commit()
-        logger.info("Created initial admin user")
-
 # Configure OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -60,6 +53,17 @@ rate_limits = {
     "admin": {"requests": 50, "period": 3600},  # 50 requests per hour
     "user": {"requests": 20, "period": 3600}    # 20 requests per hour
 }
+
+# Database initialization function
+def init_db():
+    db.create_all()
+    # Create admin user if not exists
+    if not User.query.filter_by(username='admin').first():
+        admin = User(username='admin', role='admin')
+        admin.set_password('admin')
+        db.session.add(admin)
+        db.session.commit()
+        logger.info("Created initial admin user")
 
 # Decorator for authentication
 def login_required(f):
@@ -430,7 +434,9 @@ def robot_command():
             logger.error(f"Error processing ESP32 status update: {str(e)}")
             return jsonify({"error": str(e)}), 400
 
+# Initialize the database within the application context
+with app.app_context():
+    init_db()
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True, host='0.0.0.0', port=5000)
