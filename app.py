@@ -57,10 +57,8 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 
-openai_api_key = (
-    os.getenv("OPENAI_API_KEY")
-    or "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"
-)
+openai_api_key = os.getenv("OPENAI_API_KEY")
+    
 
 command_history = {}
 
